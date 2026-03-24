@@ -2,6 +2,8 @@
 
 __version__ = "0.1.0"
 
+from pyeddies.params import FlowParams
+
 
 # Lazy imports for pyvista-dependent classes
 def __getattr__(name):

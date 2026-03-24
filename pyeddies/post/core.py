@@ -48,9 +48,20 @@ def _find_tavg_field(array_names, base_name):
 
 
 class FlowField:
-    """VTU file wrapper with automatic snapshot/tavg detection."""
+    """VTU file wrapper with automatic snapshot/tavg detection.
 
-    def __init__(self, vtu_path):
+    Parameters
+    ----------
+    vtu_path : str
+        VTU file path (tavg or instantaneous)
+    params : str or FlowParams or dict, optional
+        - str → params.yaml 경로 → FlowParams.from_yaml() 자동
+        - FlowParams → 직접 사용
+        - dict → 기존 호환
+        - None → 시각화만 가능, 물리 분석은 비활성
+    """
+
+    def __init__(self, vtu_path, params=None):
         if pv is None:
             raise ImportError("pyvista is required for FlowField. Install: pip install pyvista")
         if not os.path.exists(vtu_path):
@@ -59,6 +70,15 @@ class FlowField:
         self.mesh = pv.read(vtu_path)
         self.mode = self._detect_mode()
         self._field_map = self._build_field_map()
+
+        # params 연결 (optional)
+        self.params = None
+        if params is not None:
+            if isinstance(params, str):
+                from pyeddies.params import FlowParams
+                self.params = FlowParams.from_yaml(params)
+            else:
+                self.params = params
 
     def _detect_mode(self):
         names = set(self.mesh.array_names)
@@ -140,6 +160,55 @@ class FlowField:
     @property
     def points(self):
         return self.mesh.points
+
+    # --- Convenience methods requiring params ---
+
+    def _require_params(self, method_name):
+        """Raise if params not set."""
+        if self.params is None:
+            raise ValueError(
+                f"{method_name}() requires flow params. "
+                f"Use: FlowField('file.vtu', params='params.yaml')"
+            )
+
+    def _params_dict(self):
+        """Return params as dict (handles FlowParams, dict, etc.)."""
+        if hasattr(self.params, 'to_dict'):
+            return self.params.to_dict()
+        return self.params
+
+    def sweep(self, x_stations, **kwargs):
+        """Create StreamwiseSweep (CTBL).
+
+        Returns
+        -------
+        StreamwiseSweep
+        """
+        self._require_params('sweep')
+        from .sweep import StreamwiseSweep
+        return StreamwiseSweep(self, x_stations, flow_params=self._params_dict(), **kwargs)
+
+    def fc_sweep(self, x_stations, **kwargs):
+        """Create FilmCoolingSweep (FC).
+
+        Returns
+        -------
+        FilmCoolingSweep
+        """
+        self._require_params('fc_sweep')
+        from .fc import FilmCoolingSweep
+        return FilmCoolingSweep(self, x_stations, flow_params=self._params_dict(), **kwargs)
+
+    def snapshot_analysis(self, **kwargs):
+        """Create SnapshotAnalyzer (instantaneous).
+
+        Returns
+        -------
+        SnapshotAnalyzer
+        """
+        from .snapshot import SnapshotAnalyzer
+        fp = self._params_dict() if self.params is not None else {}
+        return SnapshotAnalyzer(self, flow_params=fp, **kwargs)
 
 
 def _axis_to_idx(axis):
