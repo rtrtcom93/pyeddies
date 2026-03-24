@@ -125,16 +125,80 @@ class FlowField:
             return data[:, comp]
         return data
 
-    def slice(self, origin, normal):
-        """PyVista slice."""
-        return self.mesh.slice(normal=normal, origin=origin)
+    def slice(self, normal_or_origin='z', origin_or_normal=None,
+              x_over_D=None):
+        """Plane slice with flexible API.
+
+        Supports two calling conventions:
+        - New: slice('z'), slice('z', 0.015), slice('x', x_over_D=5)
+        - Legacy: slice(origin_tuple, normal_tuple) — auto-detected
+
+        Parameters
+        ----------
+        normal_or_origin : str or tuple/list
+            str ('x','y','z') → axis-aligned slice
+            tuple/list of len 3 → could be origin (legacy) or normal vector
+        origin_or_normal : float, tuple/list, or None
+            str mode: float → coordinate along axis, tuple → [ox,oy,oz]
+            legacy mode: normal vector
+        x_over_D : float, optional
+            Slice at x = x_over_D * D (requires params, normal='x')
+
+        Returns
+        -------
+        SliceResult or pyvista.PolyData
+            SliceResult when using new API; raw PolyData for legacy calls
+        """
+        import numpy as np
+
+        # --- Legacy detection: slice((ox,oy,oz), (nx,ny,nz)) ---
+        if (not isinstance(normal_or_origin, str)
+                and origin_or_normal is not None
+                and not isinstance(origin_or_normal, (int, float))):
+            # Legacy call: slice(origin, normal)
+            return self.mesh.slice(normal=origin_or_normal,
+                                   origin=normal_or_origin)
+
+        # --- New API ---
+        normal = normal_or_origin
+        origin = origin_or_normal
+
+        if isinstance(normal, str):
+            axis_map = {'x': [1, 0, 0], 'y': [0, 1, 0], 'z': [0, 0, 1]}
+            n = axis_map[normal]
+            axis_idx = {'x': 0, 'y': 1, 'z': 2}[normal]
+
+            if x_over_D is not None and normal == 'x':
+                self._require_params('slice with x_over_D')
+                fp = self._params_dict()
+                o = [0, 0, 0]
+                o[axis_idx] = x_over_D * fp['D']
+                origin_pt = o
+            elif origin is None:
+                bounds = self.mesh.bounds
+                mid = (bounds[axis_idx * 2] + bounds[axis_idx * 2 + 1]) / 2
+                o = [0, 0, 0]
+                o[axis_idx] = mid
+                origin_pt = o
+            elif isinstance(origin, (int, float)):
+                o = [0, 0, 0]
+                o[axis_idx] = origin
+                origin_pt = o
+            else:
+                origin_pt = list(origin)
+        else:
+            n = list(normal)
+            origin_pt = list(origin) if origin is not None else self.mesh.center
+
+        sliced = self.mesh.slice(normal=n, origin=origin_pt)
+        return SliceResult(sliced, self.params)
 
     def slice_clip(self, origin, normal, axis='y', vmin=None, vmax=None):
         """Slice + clip to a window along an axis.
 
         Preserved from original PyFRStats._slice_clip_window.
         """
-        sli = self.slice(origin, normal)
+        sli = self.mesh.slice(normal=normal, origin=origin)
         if sli.n_points == 0:
             raise RuntimeError("Slice has no points.")
 
@@ -149,6 +213,106 @@ class FlowField:
             o = [0.0, 0.0, 0.0]; o[ax] = vmax
             ds = ds.clip(normal=nvec, origin=o, invert=True)
         return ds
+
+    def box(self, x=None, y=None, z=None):
+        """3D region clipping. No params required.
+
+        Parameters
+        ----------
+        x, y, z : list of [min, max], optional
+            None → full range along that axis
+
+        Returns
+        -------
+        FlowField — clipped (chaining: ff.box(...).slice('z'))
+        """
+        bounds = list(self.mesh.bounds)
+        if x is not None:
+            bounds[0], bounds[1] = x
+        if y is not None:
+            bounds[2], bounds[3] = y
+        if z is not None:
+            bounds[4], bounds[5] = z
+
+        clipped = self.mesh.clip_box(bounds, invert=False)
+        ff_new = FlowField.__new__(FlowField)
+        ff_new.path = self.path
+        ff_new.mesh = clipped
+        ff_new.mode = self.mode
+        ff_new._field_map = self._field_map
+        ff_new.params = self.params
+        return ff_new
+
+    def probe(self, points):
+        """Extract values at specific coordinates.
+
+        Parameters
+        ----------
+        points : array-like, shape (N, 3)
+
+        Returns
+        -------
+        dict: {variable_name: array(N)}
+        """
+        import numpy as np
+        pts = np.asarray(points)
+        result = self.mesh.probe(pts)
+        return {name: result[name] for name in result.array_names}
+
+    def _infer_params_from_vtu(self):
+        """Infer flow parameters from VTU freestream data.
+
+        Fallback when no params.yaml provided.
+        utau, d99 etc. cannot be inferred → None.
+        """
+        import warnings
+        import numpy as np
+        from pyeddies.material.property import get_air_nasa9, mu_sutherland
+
+        R_gas = 287.003
+        y = self.mesh.points[:, 1]
+        y_top = y.max() * 0.9
+        freestream = y > y_top
+
+        # Detect variable names (tavg vs instantaneous)
+        names = set(self.mesh.array_names)
+        if 'avg-p' in names:
+            p_arr, rho_arr, u_arr = 'avg-p', 'avg-rho', 'avg-u'
+        elif 'Pressure' in names:
+            p_arr, rho_arr, u_arr = 'Pressure', 'Density', 'Velocity'
+        else:
+            return None
+
+        try:
+            p_data = self.mesh[p_arr][freestream]
+            rho_data = self.mesh[rho_arr][freestream]
+            if u_arr == 'Velocity':
+                u_data = self.mesh[u_arr][freestream][:, 0]
+            else:
+                u_data = self.mesh[u_arr][freestream]
+        except (KeyError, IndexError):
+            return None
+
+        pe = float(np.mean(p_data))
+        rhoe = float(np.mean(rho_data))
+        Te = pe / (rhoe * R_gas)
+        ue = float(np.mean(u_data))
+
+        air = get_air_nasa9()
+        gamma = float(air.gamma(Te))
+
+        warnings.warn(
+            f"No params provided — inferred from VTU freestream: "
+            f"pe={pe:.0f}, Te={Te:.1f}K, ue={ue:.1f}m/s",
+            UserWarning,
+        )
+
+        return {
+            'pe': pe, 'Te': Te, 'rhoe': rhoe, 'rho_e': rhoe,
+            'ue': ue, 'gamma': gamma, 'R_gas': R_gas,
+            'mu_e': mu_sutherland(Te),
+            '_inferred': True,
+        }
 
     def available_fields(self):
         """List of available normalized field names."""
@@ -216,6 +380,73 @@ def _axis_to_idx(axis):
     if axis in (1, 'y', 'Y'): return 1
     if axis in (2, 'z', 'Z'): return 2
     raise ValueError("axis must be one of: 0,1,2,'x','y','z'")
+
+
+class SliceResult:
+    """Wrapper for slice results — visualization + data access.
+
+    Examples
+    --------
+    s = ff.slice('z')
+    s.plot('Temperature')
+    fig, ax = s.plot('Temperature')
+    ax.set_title('My title')
+    df = s.to_dataframe()
+    """
+
+    def __init__(self, mesh_slice, params=None):
+        self.mesh = mesh_slice
+        self.params = params
+
+    @property
+    def data(self):
+        """Raw PyVista mesh."""
+        return self.mesh
+
+    @property
+    def n_points(self):
+        return self.mesh.n_points
+
+    @property
+    def points(self):
+        return self.mesh.points
+
+    def __getitem__(self, key):
+        """Access array data by name."""
+        return self.mesh[key]
+
+    @property
+    def array_names(self):
+        return self.mesh.array_names
+
+    def plot(self, variable, **kwargs):
+        """2D contour plot.
+
+        Parameters
+        ----------
+        variable : str
+        **kwargs : cmap, clim, title, figsize, etc.
+
+        Returns
+        -------
+        fig, ax — matplotlib figure and axes
+        """
+        from pyeddies.viz.contours import plot_slice_contour
+        p = None
+        if self.params is not None:
+            p = self.params.to_dict() if hasattr(self.params, 'to_dict') else self.params
+        return plot_slice_contour(self.mesh, variable, params=p, **kwargs)
+
+    def to_dataframe(self):
+        """Convert to pandas DataFrame."""
+        import pandas as pd
+        coords = self.mesh.points
+        data = {'x': coords[:, 0], 'y': coords[:, 1], 'z': coords[:, 2]}
+        for name in self.mesh.array_names:
+            arr = self.mesh[name]
+            if arr.ndim == 1:
+                data[name] = arr
+        return pd.DataFrame(data)
 
 
 # -------------------------------------------------------
