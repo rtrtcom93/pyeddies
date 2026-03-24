@@ -28,4 +28,19 @@ def __getattr__(name):
     if name == 'StreamwiseSweep':
         from .sweep import StreamwiseSweep
         return StreamwiseSweep
+    if name == 'FilmCoolingSweep':
+        from .fc import FilmCoolingSweep
+        return FilmCoolingSweep
+    if name == 'SnapshotAnalyzer':
+        from .snapshot import SnapshotAnalyzer
+        return SnapshotAnalyzer
+    if name == 'SnapshotSequence':
+        from .snapshot import SnapshotSequence
+        return SnapshotSequence
+    if name == 'ProbeTimeSeries':
+        from .timeseries import ProbeTimeSeries
+        return ProbeTimeSeries
+    if name == 'PlaneTimeSeries':
+        from .timeseries import PlaneTimeSeries
+        return PlaneTimeSeries
     raise AttributeError(f"module 'pyeddies.post' has no attribute {name!r}")
