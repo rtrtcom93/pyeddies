@@ -3,13 +3,16 @@
 Boundary layer dynamics & turbulence post-processing toolkit for high-order CFD.
 
 ## Features
-- Material properties: NASA-9 thermodynamics, Sutherland viscosity
-- BL profiles: Reichardt + Coles wake, auto u_tau tuning
-- Post-processing: Wall-normal profiles, Cf, delta_99, theta, H12
-- Turbulence: Reynolds stress, Favre averaging, Van Driest transform
-- Film cooling: eta effectiveness, BR verification, jet trajectory
-- High-order interpolation: p=4 Lagrange with barycentric weights
-- I/O: Gmsh to Fluent mesh conversion, CGNS reader
+- **FlowParams**: params.yaml one-line load, auto Phase 1-4 computation
+- **Material properties**: NASA-9 thermodynamics, Sutherland viscosity, correlations
+- **BL profiles**: Reichardt + Coles wake, auto u_tau tuning
+- **Post-processing**: Wall-normal profiles, Cf, delta_99, theta, H12
+- **Turbulence**: Reynolds stress, Favre averaging, Van Driest transform
+- **Film cooling**: eta effectiveness, BR verification, jet trajectory (stub)
+- **Snapshot analysis**: Q-criterion, lambda2, vorticity, slicing
+- **Time series**: PSD, Strouhal, autocorrelation, SPOD/DMD input
+- **Visualization**: profile plots, 2D contours, 3D isosurfaces
+- **High-order interpolation**: p=4 Lagrange with barycentric weights
 
 ## Install
 
@@ -21,18 +24,23 @@ pip install -e ".[full]"  # with scipy, matplotlib
 ## Quick Start
 
 ```python
-from pyeddies import FlowField, StreamwiseSweep
-from pyeddies.material import get_air_nasa9
+from pyeddies import FlowParams, FlowField
 
-# Load tavg VTU
-ff = FlowField("tavg_merged.vtu")
+# (A) Parameters only — no VTU needed
+fp = FlowParams.from_yaml("params.yaml")
+print(fp.pe, fp.utau_0, fp.Taw)
 
-# Streamwise analysis
-air = get_air_nasa9()
-params = air.pyfr_constants(T_ref=537, Re_target=26000, L_ref=0.01, Me=0.3)
-sweep = StreamwiseSweep(ff, x_stations=[0.01, 0.03, 0.05], flow_params=params)
-sweep.compute_all()
-sweep.tier2_summary()
+# (B) VTU + params — full analysis
+ff = FlowField("tavg.vtu", params="params.yaml")
+sweep = ff.sweep([0.03, 0.05, 0.07])
+
+# (C) Slicing + visualization
+s = ff.slice('z')                    # z = z_mid (auto)
+fig, ax = s.plot('avg-T')           # matplotlib contour
+df = s.to_dataframe()               # pandas DataFrame
+
+# (D) Region clipping (chaining)
+ff.box(x=[0, 0.1]).slice('y', 0.0).plot('avg-u')
 ```
 
 ## Documentation

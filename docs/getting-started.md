@@ -38,6 +38,55 @@ sweep = ff.sweep([0.01, 0.03, 0.05])
 # sweep.tier2_summary()
 ```
 
+## Slicing, Clipping & Probing
+
+```python
+from pyeddies import FlowField
+
+ff = FlowField("tavg.vtu", params="params.yaml")
+
+# Slice by axis name (auto mid-plane)
+s = ff.slice('z')                    # z = z_mid
+s = ff.slice('z', 0.015)            # z = 0.015 m
+s = ff.slice('x', x_over_D=5)       # x = 5D (requires params)
+
+# SliceResult — plot & export
+fig, ax = s.plot('avg-T')           # matplotlib tricontourf
+fig, ax = s.plot('avg-u', cmap='viridis', levels=80)
+df = s.to_dataframe()               # pandas DataFrame
+print(s.n_points, s.array_names)
+
+# Box clipping (chaining)
+ff.box(x=[0, 0.1]).slice('y', 0.001).plot('avg-u')
+ff.box(x=[0.02, 0.08], y=[0, 0.01]).slice('z').plot('avg-T')
+
+# Point probing
+result = ff.probe([[0.05, 0.001, 0.015]])
+print(result)  # dict of arrays
+```
+
+## Visualization
+
+```python
+from pyeddies.viz import plot_uplus_yplus, plot_cf_x, plot_psd
+from pyeddies.viz import plot_slice_contour
+
+# Profile plots (from sweep results)
+fig, ax = plot_uplus_yplus(yplus, uplus, label="x/D=5")
+fig, ax = plot_cf_x(x_stations, cf_values)
+
+# PSD plot
+fig, ax = plot_psd(freq, Pxx, xlabel="f [Hz]")
+
+# 2D contour from PyVista slice
+fig, ax = plot_slice_contour(slice_mesh, 'avg-T', cmap='hot')
+
+# 3D isosurface (requires pyvista)
+from pyeddies.viz import plot_isosurface
+pl = plot_isosurface(mesh, 'Q_criterion', 1e6, color='cyan')
+pl.show()
+```
+
 ## Material Properties
 
 ```python
