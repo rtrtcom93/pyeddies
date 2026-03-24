@@ -7,3 +7,4 @@ build/
 *.vtu
 *.pyfrs
 *.pyfrm
+.obsidian/
